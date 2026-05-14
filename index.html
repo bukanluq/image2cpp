@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ImageToCPP - Arduino Display Tool</title>
+<style>
+    :root { --bg: #121212; --panel: #1e1e1e; --text: #e0e0e0; --accent: #007acc; --accent-hover: #005f9e; --grid: #444; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: var(--bg); color: var(--text); margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+    h1 { margin-top: 0; color: #fff; text-align: center; }
+    
+    .tabs { display: flex; gap: 10px; margin-bottom: 15px; width: 100%; max-width: 1200px; justify-content: center; }
+    .tab-btn { background: #333; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; transition: 0.2s; }
+    .tab-btn.active { background: var(--accent); font-weight: bold; }
+    
+    .container { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; max-width: 1200px; width: 100%; }
+    .panel { background: var(--panel); padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); display: flex; flex-direction: column; gap: 15px; flex: 1; min-width: 300px; }
+    .tab-content { display: none; flex-direction: column; gap: 15px; }
+    .tab-content.active { display: flex; }
+    
+    canvas { background: #fff; border: 2px solid #333; cursor: crosshair; image-rendering: pixelated; align-self: center; box-sizing: border-box; }
+    .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: #2a2a2a; padding: 10px; border-radius: 6px; }
+    
+    #videoArea { position: relative; width: 100%; max-width: 500px; align-self: center; background: #000; overflow: hidden; border-radius: 4px; border: 2px solid var(--grid); }
+    video { width: 100%; display: block; }
+    #cropOverlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+    #cropBox { position: absolute; border: 2px solid #0f0; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.7); box-sizing: border-box; }
+
+    button, input[type="file"]::file-selector-button { background: var(--accent); color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+    button:hover { background: var(--accent-hover); }
+    button:disabled { background: #555; cursor: not-allowed; }
+    input[type="range"] { flex: 1; cursor: pointer; }
+    textarea { width: 100%; height: 400px; background: #2d2d2d; color: #569cd6; font-family: monospace; padding: 10px; border-radius: 4px; border: 1px solid #444; resize: vertical; box-sizing: border-box; }
+    .stats { font-size: 0.9em; color: #aaa; }
+    .warning { color: #ff5555; font-weight: bold; font-size: 0.85em; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>ImageToCPP</h1>
+
+<div class="tabs">
+    <button class="tab-btn active" onclick="switchTab(this, 'imageTab')">🎨 Draw / Image</button>
+    <button class="tab-btn" onclick="switchTab(this, 'videoTab')">🎬 Video Animation</button>
+</div>
+
+<div class="container">
+    <div class="panel">
+        <div class="controls" style="background: #005f9e;">
+            <label>Screen Size: 
+                <select id="gridSize">
+                    <option value="32,32">32 x 32</option>
+                    <option value="64,64">64 x 64</option>
+                    <option value="128,64" selected>128 x 64</option>
+                </select>
+            </label>
+            <label style="font-weight: bold;">B&W Threshold: <input type="range" id="threshold" min="0" max="255" value="128"></label>
+        </div>
+
+        <div id="imageTab" class="tab-content active">
+            <div class="controls">
+                <input type="file" id="imageUpload" accept="image/png, image/jpeg, image/bmp">
+                <button id="clearBtn">Clear Canvas</button>
+                <label><input type="radio" name="tool" value="draw" checked> Draw</label>
+                <label><input type="radio" name="tool" value="erase"> Erase</label>
+            </div>
+        </div>
+
+        <div id="videoTab" class="tab-content">
+            <div class="controls">
+                <input type="file" id="videoUpload" accept="video/mp4, video/webm, video/ogg">
+            </div>
+
+            <div id="videoArea" style="display:none;">
+                <video id="videoPlayer"></video>
+                <div id="cropOverlay"><div id="cropBox"></div></div>
+            </div>
+
+            <div class="controls crop-controls" id="cropControlPanel" style="display:none;">
+                <label>Zoom/Size: <input type="range" id="cropSize" min="10" max="100" value="50"></label>
+                <label>Move X: <input type="range" id="cropX" min="0" max="100" value="50"></label>
+                <label>Move Y: <input type="range" id="cropY" min="0" max="100" value="50"></label>
+            </div>
+            
+            <p class="warning">⚠️ Keep animations under 20 frames for Arduino Uno</p>
+            <div class="controls">
+                <label>Start (s): <input type="number" id="vidStart" value="0" step="0.1" min="0" style="width: 50px;"></label>
+                <label>End (s): <input type="number" id="vidEnd" value="2" step="0.1" min="0" style="width: 50px;"></label>
+                <label>FPS: <input type="number" id="vidFPS" value="5" min="1" max="15" style="width: 45px;"></label>
+                <button id="extractBtn">Extract Frames</button>
+            </div>
+        </div>
+
+        <h3 style="margin-bottom: 0; text-align: center;">Live B&W Output Preview</h3>
+        <canvas id="pixelCanvas" width="128" height="64" style="width: 512px; height: 256px; max-width: 100%;"></canvas>
+    </div>
+
+    <div class="panel">
+        <div class="controls">
+            <button id="copyBtn">Copy Code</button>
+            <button id="downloadBtn">Download .h</button>
+            <span class="stats" id="stats">Memory: 0 bytes</span>
+        </div>
+        <textarea id="outputCode" readonly></textarea>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('pixelCanvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const outputCode = document.getElementById('outputCode');
+    
+    let width = 128, height = 64, targetAspect = 2.0;
+    let isDrawing = false, currentMode = 'image';
+    let uploadedImage = null;
+    let videoFileUrl = null;
+    let previewLoopId = null;
+    let cropRectVisual = { x_pct: 50, y_pct: 50, size_pct: 50 };
+
+    const videoPlayer = document.getElementById('videoPlayer');
+    const cropBox = document.getElementById('cropBox');
+    const videoArea = document.getElementById('videoArea');
+    const cropControls = document.getElementById('cropControlPanel');
+
+    function initCanvas() {
+        const size = document.getElementById('gridSize').value.split(',');
+        width = parseInt(size[0]); height = parseInt(size[1]);
+        targetAspect = width / height;
+        canvas.width = width; canvas.height = height;
+        ctx.fillStyle = "white"; ctx.fillRect(0, 0, width, height);
+        
+        if (currentMode === 'video' && videoFileUrl) {
+            updateCropUI();
+            drawCroppedVideoFrame();
+        } else if (currentMode === 'image' && uploadedImage) {
+            processCanvasImage();
+        }
+    }
+    document.getElementById('gridSize').addEventListener('change', initCanvas);
+
+    window.switchTab = function(btnElement, tabId) {
+        document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        
+        document.getElementById(tabId).classList.add('active');
+        btnElement.classList.add('active');
+        
+        currentMode = tabId === 'imageTab' ? 'image' : 'video';
+        
+        if (currentMode === 'image') {
+            videoPlayer.pause();
+            cancelAnimationFrame(previewLoopId);
+        } else if (currentMode === 'video' && videoFileUrl) {
+            videoPlayer.play();
+            startVideoPreviewLoop();
+        }
+        initCanvas();
+    };
+
+    document.getElementById('threshold').addEventListener('input', () => {
+        if (currentMode === 'image' && uploadedImage) {
+            processCanvasImage();
+        } else if (currentMode === 'video' && videoFileUrl) {
+            drawCroppedVideoFrame(); 
+        }
+    });
+
+    // --- Image Tab ---
+    function getMousePos(e) {
+        const rect = canvas.getBoundingClientRect();
+        return { x: Math.floor((e.clientX - rect.left) * (canvas.width / rect.width)), y: Math.floor((e.clientY - rect.top) * (canvas.height / rect.height)) };
+    }
+    function draw(e) {
+        if (!isDrawing || currentMode !== 'image') return;
+        const pos = getMousePos(e);
+        ctx.fillStyle = document.querySelector('input[name="tool"]:checked').value === 'draw' ? "black" : "white";
+        ctx.fillRect(pos.x, pos.y, 1, 1);
+        updateImageOutput();
+    }
+    canvas.addEventListener('mousedown', (e) => { isDrawing = true; draw(e); });
+    canvas.addEventListener('mousemove', draw);
+    window.addEventListener('mouseup', () => { isDrawing = false; });
+    
+    document.getElementById('clearBtn').addEventListener('click', () => {
+        uploadedImage = null; 
+        initCanvas();
+        updateImageOutput();
+    });
+
+    document.getElementById('imageUpload').addEventListener('change', function(e) {
+        if (!e.target.files[0]) return;
+        const reader = new FileReader();
+        reader.onload = e => {
+            uploadedImage = new Image();
+            uploadedImage.onload = processCanvasImage;
+            uploadedImage.src = e.target.result;
+        }
+        reader.readAsDataURL(e.target.files[0]);
+    });
+
+    function processCanvasImage() {
+        if (!uploadedImage || currentMode !== 'image') return;
+        ctx.fillStyle = "white"; ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(uploadedImage, 0, 0, width, height);
+        applyThreshold();
+        updateImageOutput();
+    }
+
+    // --- Video Tab ---
+    document.getElementById('videoUpload').addEventListener('change', function(e) {
+        if (!e.target.files[0]) return;
+        if (videoFileUrl) URL.revokeObjectURL(videoFileUrl);
+        videoFileUrl = URL.createObjectURL(e.target.files[0]);
+        videoPlayer.src = videoFileUrl;
+        
+        videoArea.style.display = 'block';
+        cropControls.style.display = 'flex';
+        videoPlayer.muted = true;
+        videoPlayer.loop = true;
+        videoPlayer.play();
+
+        videoPlayer.onloadedmetadata = () => {
+            document.getElementById('vidEnd').value = Math.min(videoPlayer.duration, 2).toFixed(1);
+            updateCropUI();
+        };
+        startVideoPreviewLoop();
+    });
+
+    document.getElementById('vidStart').addEventListener('input', function() {
+        if (videoPlayer && videoFileUrl && !isNaN(this.value)) {
+            videoPlayer.currentTime = parseFloat(this.value);
+            setTimeout(drawCroppedVideoFrame, 150); 
+        }
+    });
+
+    function updateCropSliderState() {
+        cropRectVisual.size_pct = parseInt(document.getElementById('cropSize').value);
+        cropRectVisual.x_pct = parseInt(document.getElementById('cropX').value);
+        cropRectVisual.y_pct = parseInt(document.getElementById('cropY').value);
+        updateCropUI();
+        if (currentMode === 'video') drawCroppedVideoFrame(); 
+    }
+    document.getElementById('cropSize').addEventListener('input', updateCropSliderState);
+    document.getElementById('cropX').addEventListener('input', updateCropSliderState);
+    document.getElementById('cropY').addEventListener('input', updateCropSliderState);
+
+    function updateCropUI() {
+        if (!videoFileUrl || videoPlayer.clientWidth === 0) return setTimeout(updateCropUI, 50);
+        const vidAspect = videoPlayer.clientWidth / videoPlayer.clientHeight;
+        let bW_pct, bH_pct;
+        if (targetAspect > vidAspect) {
+            bW_pct = cropRectVisual.size_pct;
+            bH_pct = cropRectVisual.size_pct * (vidAspect / targetAspect);
+        } else {
+            bH_pct = cropRectVisual.size_pct;
+            bW_pct = cropRectVisual.size_pct * (targetAspect / vidAspect);
+        }
+        cropBox.style.width = bW_pct + '%'; cropBox.style.height = bH_pct + '%';
+        cropBox.style.left = Math.max(0, Math.min(100 - bW_pct, (cropRectVisual.x_pct - (bW_pct / 2)))) + '%';
+        cropBox.style.top = Math.max(0, Math.min(100 - bH_pct, (cropRectVisual.y_pct - (bH_pct / 2)))) + '%';
+    }
+    window.addEventListener('resize', updateCropUI);
+
+    function startVideoPreviewLoop() {
+        cancelAnimationFrame(previewLoopId); 
+        if (currentMode !== 'video' || !videoFileUrl || videoPlayer.paused) return;
+        drawCroppedVideoFrame();
+        previewLoopId = requestAnimationFrame(startVideoPreviewLoop);
+    }
+
+    function drawCroppedVideoFrame() {
+        if (!videoPlayer.videoWidth || currentMode !== 'video') return;
+        
+        try {
+            ctx.fillStyle = "white"; ctx.fillRect(0, 0, width, height);
+
+            // THE FIX IS HERE: using videoWidth and videoHeight instead of naturalWidth
+            const factorX = videoPlayer.videoWidth / videoPlayer.clientWidth;
+            const factorY = videoPlayer.videoHeight / videoPlayer.clientHeight;
+            
+            const sx = cropBox.offsetLeft * factorX;
+            const sy = cropBox.offsetTop * factorY;
+            const sw = cropBox.offsetWidth * factorX;
+            const sh = cropBox.offsetHeight * factorY;
+
+            ctx.drawImage(videoPlayer, sx, sy, sw, sh, 0, 0, width, height);
+            applyThreshold();
+        } catch (error) {
+            outputCode.value = "// ERROR DRAWING VIDEO TO CANVAS: \n// " + error.message;
+        }
+    }
+
+    document.getElementById('extractBtn').addEventListener('click', async function() {
+        if (!videoFileUrl) return alert("Please upload a video first.");
+        const btn = this; btn.disabled = true; btn.innerText = "Processing...";
+        cancelAnimationFrame(previewLoopId);
+        videoPlayer.pause();
+
+        const start = parseFloat(document.getElementById('vidStart').value);
+        const end = parseFloat(document.getElementById('vidEnd').value);
+        const fps = parseInt(document.getElementById('vidFPS').value);
+        const step = 1 / fps;
+        let framesArrays = [], time = start;
+
+        outputCode.value = "// Extracting frames...\n";
+
+        while (time <= end && time <= videoPlayer.duration) {
+            videoPlayer.currentTime = time;
+            await new Promise(resolve => { videoPlayer.onseeked = resolve; setTimeout(resolve, 300); });
+            drawCroppedVideoFrame();
+            framesArrays.push(generateHexArray());
+            time += step;
+        }
+
+        if (framesArrays.length > 0) generateMultiframeCode(framesArrays, fps);
+        btn.innerText = "Extract Frames"; btn.disabled = false;
+        videoPlayer.play();
+        startVideoPreviewLoop();
+    });
+
+    // --- Core Processing Utilities ---
+    function applyThreshold() {
+        try {
+            const threshold = parseInt(document.getElementById('threshold').value);
+            const imgData = ctx.getImageData(0, 0, width, height);
+            const data = imgData.data;
+            for (let i = 0; i < data.length; i += 4) {
+                const avg = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
+                const color = avg >= threshold ? 255 : 0;
+                data[i] = data[i+1] = data[i+2] = color; data[i+3] = 255;
+            }
+            ctx.putImageData(imgData, 0, 0);
+        } catch (error) {
+             outputCode.value = "// ERROR APPLYING THRESHOLD: \n// " + error.message;
+        }
+    }
+
+    function generateHexArray() {
+        const imgData = ctx.getImageData(0, 0, width, height).data;
+        let hexArray = [];
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x += 8) {
+                let byte = 0;
+                for (let b = 0; b < 8; b++) {
+                    if (x + b < width) {
+                        const isBlack = imgData[(((y * width) + (x + b)) * 4)] === 0;
+                        if (isBlack) byte |= (1 << (7 - b));
+                    }
+                }
+                hexArray.push("0x" + byte.toString(16).padStart(2, '0').toUpperCase());
+            }
+        }
+        return hexArray;
+    }
+
+    function generateMultiframeCode(framesArrays, fps) {
+        let out = `// Generated by ImageToCPP\n// Size: ${width}x${height}px | Frames: ${framesArrays.length}\n\n`;
+        out += `#define FRAME_COUNT ${framesArrays.length}\n#define FRAME_WIDTH ${width}\n#define FRAME_HEIGHT ${height}\n\n`;
+        out += `const unsigned char myAnimation [FRAME_COUNT][${framesArrays[0].length}] PROGMEM = {\n`;
+        for(let i=0; i<framesArrays.length; i++) {
+            out += `  {\n    `;
+            const hex = framesArrays[i]; const bytesPerRow = Math.ceil(width / 8);
+            for (let j = 0; j < hex.length; j++) {
+                out += hex[j] + (j < hex.length - 1 ? ", " : "");
+                if ((j + 1) % bytesPerRow === 0 && j < hex.length - 1) out += "\n    ";
+            }
+            out += `\n  }${i < framesArrays.length - 1 ? ',' : ''}\n`;
+        }
+        out += `};`;
+        outputCode.value = out; updateStats(framesArrays.length * framesArrays[0].length, framesArrays.length);
+    }
+
+    function updateImageOutput() {
+        if (currentMode !== 'image') return;
+        const hex = generateHexArray();
+        let out = `const unsigned char myBitmap [] PROGMEM = {\n  `;
+        const bytesPerRow = Math.ceil(width / 8);
+        for (let i = 0; i < hex.length; i++) {
+            out += hex[i] + (i < hex.length - 1 ? ", " : "");
+            if ((i + 1) % bytesPerRow === 0 && i < hex.length - 1) out += "\n  ";
+        }
+        out += `\n};`;
+        outputCode.value = out; updateStats(hex.length);
+    }
+
+    function updateStats(bytes, frames = 1) {
+        document.getElementById('stats').innerText = `Memory: ${bytes} bytes | Frames: ${frames}`;
+        document.getElementById('stats').style.color = bytes > 20000 ? '#ff5555' : '#aaa'; 
+    }
+
+    document.getElementById('copyBtn').addEventListener('click', () => { outputCode.select(); document.execCommand('copy'); alert('Copied!'); });
+    document.getElementById('downloadBtn').addEventListener('click', () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([outputCode.value], { type: 'text/plain' })); a.download = 'bitmap.h'; a.click(); });
+
+    initCanvas();
+</script>
+</body>
+</html>
