@@ -21,10 +21,11 @@
     canvas { background: #fff; border: 2px solid #333; cursor: crosshair; image-rendering: pixelated; align-self: center; box-sizing: border-box; }
     .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: #2a2a2a; padding: 10px; border-radius: 6px; }
     
-    #videoArea { position: relative; width: 100%; max-width: 500px; align-self: center; background: #000; overflow: hidden; border-radius: 4px; border: 2px solid var(--grid); }
-    video { width: 100%; display: block; }
-    #cropOverlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
-    #cropBox { position: absolute; border: 2px solid #0f0; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.7); box-sizing: border-box; }
+    /* Shared Media Area Styles for both Image and Video */
+    .media-area { position: relative; width: 100%; max-width: 500px; align-self: center; background: #000; overflow: hidden; border-radius: 4px; border: 2px solid var(--grid); }
+    .media-area video, .media-area img { width: 100%; display: block; }
+    .crop-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+    .crop-box { position: absolute; border: 2px solid #0f0; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.7); box-sizing: border-box; }
 
     button, input[type="file"]::file-selector-button { background: var(--accent); color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; }
     button:hover { background: var(--accent-hover); }
@@ -57,6 +58,7 @@
             <label style="font-weight: bold;">B&W Threshold: <input type="range" id="threshold" min="0" max="255" value="128"></label>
         </div>
 
+        <!-- TAB 1: IMAGE & DRAWING -->
         <div id="imageTab" class="tab-content active">
             <div class="controls">
                 <input type="file" id="imageUpload" accept="image/png, image/jpeg, image/bmp">
@@ -64,22 +66,36 @@
                 <label><input type="radio" name="tool" value="draw" checked> Draw</label>
                 <label><input type="radio" name="tool" value="erase"> Erase</label>
             </div>
+
+            <!-- IMAGE CROPPER AREA -->
+            <div id="imageArea" class="media-area" style="display:none;">
+                <img id="imagePlayer">
+                <div class="crop-overlay"><div id="imgCropBox" class="crop-box"></div></div>
+            </div>
+
+            <div class="controls crop-controls" id="imgCropControlPanel" style="display:none;">
+                <label>Zoom/Size: <input type="range" id="imgCropSize" min="10" max="100" value="100"></label>
+                <label>Move X: <input type="range" id="imgCropX" min="0" max="100" value="50"></label>
+                <label>Move Y: <input type="range" id="imgCropY" min="0" max="100" value="50"></label>
+            </div>
         </div>
 
+        <!-- TAB 2: VIDEO LIMITER & EXTRACTOR -->
         <div id="videoTab" class="tab-content">
             <div class="controls">
                 <input type="file" id="videoUpload" accept="video/mp4, video/webm, video/ogg">
             </div>
 
-            <div id="videoArea" style="display:none;">
+            <!-- VIDEO CROPPER AREA -->
+            <div id="videoArea" class="media-area" style="display:none;">
                 <video id="videoPlayer"></video>
-                <div id="cropOverlay"><div id="cropBox"></div></div>
+                <div class="crop-overlay"><div id="vidCropBox" class="crop-box"></div></div>
             </div>
 
-            <div class="controls crop-controls" id="cropControlPanel" style="display:none;">
-                <label>Zoom/Size: <input type="range" id="cropSize" min="10" max="100" value="50"></label>
-                <label>Move X: <input type="range" id="cropX" min="0" max="100" value="50"></label>
-                <label>Move Y: <input type="range" id="cropY" min="0" max="100" value="50"></label>
+            <div class="controls crop-controls" id="vidCropControlPanel" style="display:none;">
+                <label>Zoom/Size: <input type="range" id="vidCropSize" min="10" max="100" value="50"></label>
+                <label>Move X: <input type="range" id="vidCropX" min="0" max="100" value="50"></label>
+                <label>Move Y: <input type="range" id="vidCropY" min="0" max="100" value="50"></label>
             </div>
             
             <p class="warning">⚠️ Keep animations under 20 frames for Arduino Uno</p>
@@ -110,18 +126,26 @@
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     const outputCode = document.getElementById('outputCode');
     
+    // Global State
     let width = 128, height = 64, targetAspect = 2.0;
     let isDrawing = false, currentMode = 'image';
-    let uploadedImage = null;
     let videoFileUrl = null;
     let previewLoopId = null;
-    let cropRectVisual = { x_pct: 50, y_pct: 50, size_pct: 50 };
+
+    // Media Elements
+    const imagePlayer = document.getElementById('imagePlayer');
+    const imgCropBox = document.getElementById('imgCropBox');
+    const imageArea = document.getElementById('imageArea');
+    const imgCropControlPanel = document.getElementById('imgCropControlPanel');
+    let imgCropRect = { x_pct: 50, y_pct: 50, size_pct: 100 };
 
     const videoPlayer = document.getElementById('videoPlayer');
-    const cropBox = document.getElementById('cropBox');
+    const vidCropBox = document.getElementById('vidCropBox');
     const videoArea = document.getElementById('videoArea');
-    const cropControls = document.getElementById('cropControlPanel');
+    const vidCropControlPanel = document.getElementById('vidCropControlPanel');
+    let vidCropRect = { x_pct: 50, y_pct: 50, size_pct: 50 };
 
+    // --- Core Canvas Setup ---
     function initCanvas() {
         const size = document.getElementById('gridSize').value.split(',');
         width = parseInt(size[0]); height = parseInt(size[1]);
@@ -130,14 +154,16 @@
         ctx.fillStyle = "white"; ctx.fillRect(0, 0, width, height);
         
         if (currentMode === 'video' && videoFileUrl) {
-            updateCropUI();
+            updateVidCropUI();
             drawCroppedVideoFrame();
-        } else if (currentMode === 'image' && uploadedImage) {
+        } else if (currentMode === 'image' && imagePlayer.src) {
+            updateImgCropUI();
             processCanvasImage();
         }
     }
     document.getElementById('gridSize').addEventListener('change', initCanvas);
 
+    // --- Tab Switching ---
     window.switchTab = function(btnElement, tabId) {
         document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -157,15 +183,80 @@
         initCanvas();
     };
 
+    // --- Unified Threshold Handler ---
     document.getElementById('threshold').addEventListener('input', () => {
-        if (currentMode === 'image' && uploadedImage) {
+        if (currentMode === 'image' && imagePlayer.src) {
             processCanvasImage();
         } else if (currentMode === 'video' && videoFileUrl) {
             drawCroppedVideoFrame(); 
         }
     });
 
-    // --- Image Tab ---
+    // --- Tab 1: Image Upload & Crop Logic ---
+    document.getElementById('imageUpload').addEventListener('change', function(e) {
+        if (!e.target.files[0]) return;
+        const reader = new FileReader();
+        reader.onload = e => {
+            imagePlayer.onload = () => {
+                imageArea.style.display = 'block';
+                imgCropControlPanel.style.display = 'flex';
+                updateImgCropUI();
+                processCanvasImage();
+            };
+            imagePlayer.src = e.target.result;
+        }
+        reader.readAsDataURL(e.target.files[0]);
+    });
+
+    function updateImgCropSliderState() {
+        imgCropRect.size_pct = parseInt(document.getElementById('imgCropSize').value);
+        imgCropRect.x_pct = parseInt(document.getElementById('imgCropX').value);
+        imgCropRect.y_pct = parseInt(document.getElementById('imgCropY').value);
+        updateImgCropUI();
+        if (currentMode === 'image') processCanvasImage();
+    }
+    document.getElementById('imgCropSize').addEventListener('input', updateImgCropSliderState);
+    document.getElementById('imgCropX').addEventListener('input', updateImgCropSliderState);
+    document.getElementById('imgCropY').addEventListener('input', updateImgCropSliderState);
+
+    function updateImgCropUI() {
+        if (!imagePlayer.src || imagePlayer.clientWidth === 0) return setTimeout(updateImgCropUI, 50);
+        const imgAspect = imagePlayer.clientWidth / imagePlayer.clientHeight;
+        let bW_pct, bH_pct;
+        if (targetAspect > imgAspect) {
+            bW_pct = imgCropRect.size_pct;
+            bH_pct = imgCropRect.size_pct * (imgAspect / targetAspect);
+        } else {
+            bH_pct = imgCropRect.size_pct;
+            bW_pct = imgCropRect.size_pct * (targetAspect / imgAspect);
+        }
+        imgCropBox.style.width = bW_pct + '%'; imgCropBox.style.height = bH_pct + '%';
+        imgCropBox.style.left = Math.max(0, Math.min(100 - bW_pct, (imgCropRect.x_pct - (bW_pct / 2)))) + '%';
+        imgCropBox.style.top = Math.max(0, Math.min(100 - bH_pct, (imgCropRect.y_pct - (bH_pct / 2)))) + '%';
+    }
+
+    function processCanvasImage() {
+        if (!imagePlayer.src || currentMode !== 'image') return;
+        ctx.fillStyle = "white"; ctx.fillRect(0, 0, width, height);
+        
+        try {
+            const factorX = imagePlayer.naturalWidth / imagePlayer.clientWidth;
+            const factorY = imagePlayer.naturalHeight / imagePlayer.clientHeight;
+            
+            const sx = imgCropBox.offsetLeft * factorX;
+            const sy = imgCropBox.offsetTop * factorY;
+            const sw = imgCropBox.offsetWidth * factorX;
+            const sh = imgCropBox.offsetHeight * factorY;
+
+            ctx.drawImage(imagePlayer, sx, sy, sw, sh, 0, 0, width, height);
+            applyThreshold();
+            updateImageOutput();
+        } catch (error) {
+            outputCode.value = "// ERROR DRAWING IMAGE: \n// " + error.message;
+        }
+    }
+
+    // --- Tab 1: Manual Drawing Logic ---
     function getMousePos(e) {
         const rect = canvas.getBoundingClientRect();
         return { x: Math.floor((e.clientX - rect.left) * (canvas.width / rect.width)), y: Math.floor((e.clientY - rect.top) * (canvas.height / rect.height)) };
@@ -182,31 +273,14 @@
     window.addEventListener('mouseup', () => { isDrawing = false; });
     
     document.getElementById('clearBtn').addEventListener('click', () => {
-        uploadedImage = null; 
+        imagePlayer.removeAttribute('src'); 
+        imageArea.style.display = 'none';
+        imgCropControlPanel.style.display = 'none';
         initCanvas();
         updateImageOutput();
     });
 
-    document.getElementById('imageUpload').addEventListener('change', function(e) {
-        if (!e.target.files[0]) return;
-        const reader = new FileReader();
-        reader.onload = e => {
-            uploadedImage = new Image();
-            uploadedImage.onload = processCanvasImage;
-            uploadedImage.src = e.target.result;
-        }
-        reader.readAsDataURL(e.target.files[0]);
-    });
-
-    function processCanvasImage() {
-        if (!uploadedImage || currentMode !== 'image') return;
-        ctx.fillStyle = "white"; ctx.fillRect(0, 0, width, height);
-        ctx.drawImage(uploadedImage, 0, 0, width, height);
-        applyThreshold();
-        updateImageOutput();
-    }
-
-    // --- Video Tab ---
+    // --- Tab 2: Video Upload & Crop Logic ---
     document.getElementById('videoUpload').addEventListener('change', function(e) {
         if (!e.target.files[0]) return;
         if (videoFileUrl) URL.revokeObjectURL(videoFileUrl);
@@ -214,14 +288,14 @@
         videoPlayer.src = videoFileUrl;
         
         videoArea.style.display = 'block';
-        cropControls.style.display = 'flex';
+        vidCropControlPanel.style.display = 'flex';
         videoPlayer.muted = true;
         videoPlayer.loop = true;
         videoPlayer.play();
 
         videoPlayer.onloadedmetadata = () => {
             document.getElementById('vidEnd').value = Math.min(videoPlayer.duration, 2).toFixed(1);
-            updateCropUI();
+            updateVidCropUI();
         };
         startVideoPreviewLoop();
     });
@@ -233,33 +307,33 @@
         }
     });
 
-    function updateCropSliderState() {
-        cropRectVisual.size_pct = parseInt(document.getElementById('cropSize').value);
-        cropRectVisual.x_pct = parseInt(document.getElementById('cropX').value);
-        cropRectVisual.y_pct = parseInt(document.getElementById('cropY').value);
-        updateCropUI();
+    function updateVidCropSliderState() {
+        vidCropRect.size_pct = parseInt(document.getElementById('vidCropSize').value);
+        vidCropRect.x_pct = parseInt(document.getElementById('vidCropX').value);
+        vidCropRect.y_pct = parseInt(document.getElementById('vidCropY').value);
+        updateVidCropUI();
         if (currentMode === 'video') drawCroppedVideoFrame(); 
     }
-    document.getElementById('cropSize').addEventListener('input', updateCropSliderState);
-    document.getElementById('cropX').addEventListener('input', updateCropSliderState);
-    document.getElementById('cropY').addEventListener('input', updateCropSliderState);
+    document.getElementById('vidCropSize').addEventListener('input', updateVidCropSliderState);
+    document.getElementById('vidCropX').addEventListener('input', updateVidCropSliderState);
+    document.getElementById('vidCropY').addEventListener('input', updateVidCropSliderState);
 
-    function updateCropUI() {
-        if (!videoFileUrl || videoPlayer.clientWidth === 0) return setTimeout(updateCropUI, 50);
+    function updateVidCropUI() {
+        if (!videoFileUrl || videoPlayer.clientWidth === 0) return setTimeout(updateVidCropUI, 50);
         const vidAspect = videoPlayer.clientWidth / videoPlayer.clientHeight;
         let bW_pct, bH_pct;
         if (targetAspect > vidAspect) {
-            bW_pct = cropRectVisual.size_pct;
-            bH_pct = cropRectVisual.size_pct * (vidAspect / targetAspect);
+            bW_pct = vidCropRect.size_pct;
+            bH_pct = vidCropRect.size_pct * (vidAspect / targetAspect);
         } else {
-            bH_pct = cropRectVisual.size_pct;
-            bW_pct = cropRectVisual.size_pct * (targetAspect / vidAspect);
+            bH_pct = vidCropRect.size_pct;
+            bW_pct = vidCropRect.size_pct * (targetAspect / vidAspect);
         }
-        cropBox.style.width = bW_pct + '%'; cropBox.style.height = bH_pct + '%';
-        cropBox.style.left = Math.max(0, Math.min(100 - bW_pct, (cropRectVisual.x_pct - (bW_pct / 2)))) + '%';
-        cropBox.style.top = Math.max(0, Math.min(100 - bH_pct, (cropRectVisual.y_pct - (bH_pct / 2)))) + '%';
+        vidCropBox.style.width = bW_pct + '%'; vidCropBox.style.height = bH_pct + '%';
+        vidCropBox.style.left = Math.max(0, Math.min(100 - bW_pct, (vidCropRect.x_pct - (bW_pct / 2)))) + '%';
+        vidCropBox.style.top = Math.max(0, Math.min(100 - bH_pct, (vidCropRect.y_pct - (bH_pct / 2)))) + '%';
     }
-    window.addEventListener('resize', updateCropUI);
+    window.addEventListener('resize', () => { updateImgCropUI(); updateVidCropUI(); });
 
     function startVideoPreviewLoop() {
         cancelAnimationFrame(previewLoopId); 
@@ -270,23 +344,21 @@
 
     function drawCroppedVideoFrame() {
         if (!videoPlayer.videoWidth || currentMode !== 'video') return;
-        
         try {
             ctx.fillStyle = "white"; ctx.fillRect(0, 0, width, height);
 
-            // THE FIX IS HERE: using videoWidth and videoHeight instead of naturalWidth
             const factorX = videoPlayer.videoWidth / videoPlayer.clientWidth;
             const factorY = videoPlayer.videoHeight / videoPlayer.clientHeight;
             
-            const sx = cropBox.offsetLeft * factorX;
-            const sy = cropBox.offsetTop * factorY;
-            const sw = cropBox.offsetWidth * factorX;
-            const sh = cropBox.offsetHeight * factorY;
+            const sx = vidCropBox.offsetLeft * factorX;
+            const sy = vidCropBox.offsetTop * factorY;
+            const sw = vidCropBox.offsetWidth * factorX;
+            const sh = vidCropBox.offsetHeight * factorY;
 
             ctx.drawImage(videoPlayer, sx, sy, sw, sh, 0, 0, width, height);
             applyThreshold();
         } catch (error) {
-            outputCode.value = "// ERROR DRAWING VIDEO TO CANVAS: \n// " + error.message;
+            outputCode.value = "// ERROR DRAWING VIDEO: \n// " + error.message;
         }
     }
 
