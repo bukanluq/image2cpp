@@ -24,14 +24,14 @@
     /* Shared Media Area Styles for both Image and Video */
     .media-area { position: relative; width: 100%; max-width: 500px; align-self: center; background: #000; overflow: hidden; border-radius: 4px; border: 2px solid var(--grid); }
     .media-area video { width: 100%; display: block; }
-    .media-area img { width: 100%; display: block; background: #ffffff; /* Adds white background for transparent PNGs */ }
+    .media-area img { width: 100%; display: block; background: #ffffff; }
     .crop-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
     .crop-box { position: absolute; border: 2px solid #0f0; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.7); box-sizing: border-box; }
 
     button, input[type="file"]::file-selector-button { background: var(--accent); color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; }
     button:hover { background: var(--accent-hover); }
     button:disabled { background: #555; cursor: not-allowed; }
-    input[type="range"] { flex: 1; cursor: pointer; }
+    input[type="range"] { flex: 1; cursor: pointer; min-width: 80px; }
     textarea { width: 100%; height: 400px; background: #2d2d2d; color: #569cd6; font-family: monospace; padding: 10px; border-radius: 4px; border: 1px solid #444; resize: vertical; box-sizing: border-box; }
     .stats { font-size: 0.9em; color: #aaa; }
     .warning { color: #ff5555; font-weight: bold; font-size: 0.85em; text-align: center; }
@@ -48,6 +48,7 @@
 
 <div class="container">
     <div class="panel">
+        <!-- GLOBAL CONFIGURATION -->
         <div class="controls" style="background: #005f9e;">
             <label>Board: 
                 <select id="boardType">
@@ -62,7 +63,6 @@
                     <option value="128,64" selected>128 x 64</option>
                 </select>
             </label>
-            <label style="font-weight: bold;">B&W Threshold: <input type="range" id="threshold" min="0" max="255" value="128"></label>
         </div>
 
         <!-- TAB 1: IMAGE & DRAWING -->
@@ -81,6 +81,7 @@
             </div>
 
             <div class="controls crop-controls" id="imgCropControlPanel" style="display:none;">
+                <label style="font-weight: bold; color: var(--accent);">B&W Threshold: <input type="range" id="imgThreshold" min="0" max="255" value="128"></label>
                 <label>Zoom/Size: <input type="range" id="imgCropSize" min="10" max="100" value="100"></label>
                 <label>Move X: <input type="range" id="imgCropX" min="0" max="100" value="50"></label>
                 <label>Move Y: <input type="range" id="imgCropY" min="0" max="100" value="50"></label>
@@ -100,6 +101,7 @@
             </div>
 
             <div class="controls crop-controls" id="vidCropControlPanel" style="display:none;">
+                <label style="font-weight: bold; color: var(--accent);">B&W Threshold: <input type="range" id="vidThreshold" min="0" max="255" value="128"></label>
                 <label>Zoom/Size: <input type="range" id="vidCropSize" min="10" max="100" value="50"></label>
                 <label>Move X: <input type="range" id="vidCropX" min="0" max="100" value="50"></label>
                 <label>Move Y: <input type="range" id="vidCropY" min="0" max="100" value="50"></label>
@@ -207,13 +209,13 @@
         initCanvas();
     };
 
-    // --- Unified Threshold Handler ---
-    document.getElementById('threshold').addEventListener('input', () => {
-        if (currentMode === 'image' && imagePlayer.src) {
-            processCanvasImage();
-        } else if (currentMode === 'video' && videoFileUrl) {
-            drawCroppedVideoFrame(); 
-        }
+    // --- Independent Threshold Handlers ---
+    document.getElementById('imgThreshold').addEventListener('input', () => {
+        if (currentMode === 'image' && imagePlayer.src) processCanvasImage();
+    });
+    
+    document.getElementById('vidThreshold').addEventListener('input', () => {
+        if (currentMode === 'video' && videoFileUrl) drawCroppedVideoFrame();
     });
 
     // --- Tab 1: Image Upload & Crop Logic ---
@@ -417,7 +419,9 @@
     // --- Core Processing Utilities ---
     function applyThreshold() {
         try {
-            const threshold = parseInt(document.getElementById('threshold').value);
+            const activeThresholdId = currentMode === 'image' ? 'imgThreshold' : 'vidThreshold';
+            const threshold = parseInt(document.getElementById(activeThresholdId).value);
+            
             const imgData = ctx.getImageData(0, 0, width, height);
             const data = imgData.data;
             for (let i = 0; i < data.length; i += 4) {
